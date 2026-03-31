@@ -1,0 +1,22 @@
+# Logs
+logs/
+*.log
+
+# Build folders
+build/
+dist/
+out/
+
+# Node modules (frontend)
+node_modules/
+
+# IDE files
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+
+.env

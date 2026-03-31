@@ -4,6 +4,7 @@ import com.ilovemusic.ilovemusic_backend.common.exception.UnauthorizedException;
 import com.ilovemusic.ilovemusic_backend.common.response.ApiResponse;
 import com.ilovemusic.ilovemusic_backend.entity.User;
 import com.ilovemusic.ilovemusic_backend.repository.UserRepository;
+import com.ilovemusic.ilovemusic_backend.service.EmailService;
 import com.ilovemusic.ilovemusic_backend.service.SpotifyService;
 import com.ilovemusic.ilovemusic_backend.util.JwtUtil;
 import lombok.extern.slf4j.Slf4j;
@@ -26,6 +27,7 @@ public class AuthController {
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final SpotifyService spotifyService;
+    private final EmailService emailService;  // NEW
 
     // ✅ With these
     @Value("${spotify.client.id:}")
@@ -43,11 +45,13 @@ public class AuthController {
     public AuthController(JwtUtil jwtUtil,
                           UserRepository userRepository,
                           PasswordEncoder passwordEncoder,
-                          SpotifyService spotifyService) {
+                          SpotifyService spotifyService,
+                          EmailService emailService) {  // NEW
         this.jwtUtil = jwtUtil;
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
         this.spotifyService = spotifyService;
+        this.emailService = emailService;  // NEW
     }
 
     // ─── Register ─────────────────────────────────────────────────────────────
@@ -111,20 +115,27 @@ public class AuthController {
                             "VALIDATION_ERROR", 400));
         }
 
-        User user = userRepository.findByUsername(username)
-                .orElseThrow(() -> new UnauthorizedException("Invalid credentials"));
+        // Try to find user by email first (since frontend sends email as username)
+        // Then fall back to username
+        User user = userRepository.findByEmail(username)
+                .orElseGet(() -> userRepository.findByUsername(username).orElse(null));
+
+        if (user == null) {
+            throw new UnauthorizedException("Invalid credentials");
+        }
 
         if (user.getPassword() == null ||
                 !passwordEncoder.matches(password, user.getPassword())) {
             throw new UnauthorizedException("Invalid credentials");
         }
 
-        String token = jwtUtil.generateToken(username);
+        String token = jwtUtil.generateToken(user.getUsername());
         Map<String, String> data = new HashMap<>();
         data.put("token", token);
-        data.put("username", username);
+        data.put("username", user.getUsername());
         data.put("email", user.getEmail());
 
+        log.info("User logged in: {}", user.getEmail());
         return ResponseEntity.ok(ApiResponse.success(data, "Login successful"));
     }
 
@@ -298,6 +309,158 @@ public class AuthController {
 
         return ResponseEntity.ok(
                 ApiResponse.success(data, "Spotify connection status retrieved"));
+    }
+
+    // ─── Forgot Password ─────────────────────────────────────────────────
+    @PostMapping("/forgot-password")
+    public ResponseEntity<ApiResponse<Void>> forgotPassword(
+            @RequestBody Map<String, String> request) {
+        
+        String email = request.get("email");
+        
+        if (email == null || email.isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Email is required", "EMAIL_REQUIRED", 400));
+        }
+
+        User user = userRepository.findByEmail(email)
+                .orElse(null);
+        
+        if (user == null) {
+            // For security, don't reveal if email exists
+            return ResponseEntity.ok(
+                    ApiResponse.success(null, "If email exists, password reset link will be sent"));
+        }
+
+        // Generate reset token (valid for 30 minutes)
+        String resetToken = jwtUtil.generateToken(email);
+        user.setResetToken(resetToken);
+        user.setResetTokenExpiry(java.time.LocalDateTime.now().plusMinutes(30));
+        userRepository.save(user);
+
+        // Send password reset email
+        emailService.sendPasswordResetEmail(email, user.getUsername(), resetToken);
+
+        log.info("Password reset token generated and email sent for user: {}", email);
+
+        return ResponseEntity.ok(
+                ApiResponse.success(null, "If email exists, password reset link will be sent"));
+    }
+
+    // ─── Reset Password ──────────────────────────────────────────────────
+    @PostMapping("/reset-password")
+    public ResponseEntity<ApiResponse<Void>> resetPassword(
+            @RequestBody Map<String, String> request) {
+        
+        String token = request.get("token");
+        String newPassword = request.get("password");
+
+        if (token == null || token.isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Reset token is required", "TOKEN_REQUIRED", 400));
+        }
+
+        if (newPassword == null || newPassword.length() < 8) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Password must be at least 8 characters", "WEAK_PASSWORD", 400));
+        }
+
+        // Find user by reset token
+        User user = userRepository.findAll().stream()
+                .filter(u -> token.equals(u.getResetToken()))
+                .findFirst()
+                .orElse(null);
+
+        if (user == null) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Invalid or expired reset token", "INVALID_TOKEN", 400));
+        }
+
+        // Check if token is expired
+        if (user.getResetTokenExpiry() == null || 
+            java.time.LocalDateTime.now().isAfter(user.getResetTokenExpiry())) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Reset token has expired", "TOKEN_EXPIRED", 400));
+        }
+
+        // Update password
+        user.setPassword(passwordEncoder.encode(newPassword));
+        user.setResetToken(null);
+        user.setResetTokenExpiry(null);
+        user.setPasswordResetAttempts(0);
+        userRepository.save(user);
+
+        log.info("Password reset successfully for user: {}", user.getEmail());
+
+        return ResponseEntity.ok(
+                ApiResponse.success(null, "Password reset successful. Please login with your new password."));
+    }
+
+    // ─── Google OAuth Callback ────────────────────────────────────────────
+    @PostMapping("/google/callback")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> googleCallback(
+            @RequestBody Map<String, String> request) {
+        
+        String googleToken = request.get("token");
+        
+        if (googleToken == null || googleToken.isEmpty()) {
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Google token is required", "GOOGLE_TOKEN_REQUIRED", 400));
+        }
+
+        try {
+            // In production, verify the token with Google
+            // For now, extract basic info from JWT (in production use Google API)
+            // Extract email from token if possible, or use a placeholder
+            String email = extractEmailFromGoogleToken(googleToken);
+            
+            if (email == null || email.isEmpty()) {
+                return ResponseEntity.badRequest()
+                        .body(ApiResponse.error("Could not extract email from Google token", "INVALID_GOOGLE_TOKEN", 400));
+            }
+
+            // Find or create user
+            User user = userRepository.findByEmail(email)
+                    .orElseGet(() -> {
+                        User newUser = new User();
+                        newUser.setEmail(email);
+                        newUser.setUsername(email.split("@")[0]);  // Use email prefix as username
+                        newUser.setPassword(null);  // No password for OAuth users
+                        newUser.setEmailVerified(true);  // Google verified
+                        return userRepository.save(newUser);
+                    });
+
+            // Generate JWT token
+            String jwtToken = jwtUtil.generateToken(user.getUsername());
+
+            Map<String, Object> data = new HashMap<>();
+            data.put("token", jwtToken);
+            data.put("username", user.getUsername());
+            data.put("email", user.getEmail());
+
+            log.info("User logged in via Google: {}", email);
+
+            return ResponseEntity.ok(
+                    ApiResponse.success(data, "Google login successful"));
+        } catch (Exception e) {
+            log.error("Google authentication failed: {}", e.getMessage());
+            return ResponseEntity.badRequest()
+                    .body(ApiResponse.error("Google authentication failed", "GOOGLE_AUTH_FAILED", 400));
+        }
+    }
+
+    private String extractEmailFromGoogleToken(String token) {
+        try {
+            // This is a placeholder - in production, verify with Google OAuth API
+            // For now, you would call Google's tokeninfo endpoint
+            // Example: https://oauth2.googleapis.com/tokeninfo?id_token=token
+            
+            // For development, assume the email is passed
+            return null;  // Would be extracted from verified token
+        } catch (Exception e) {
+            log.error("Failed to extract email from Google token: {}", e.getMessage());
+            return null;
+        }
     }
 
     // ─── DEBUG: Check Environment Variables ────────────────────────────────

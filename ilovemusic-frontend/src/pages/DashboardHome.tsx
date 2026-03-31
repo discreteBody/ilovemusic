@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { ListMusic, Disc3, Clock, Play, Music, AudioWaveform, Search, ArrowRight } from 'lucide-react';
 import { useAuthStore } from '@/stores/useAuthStore';
@@ -62,6 +62,8 @@ const continuePlaylists = [
 
 export default function DashboardHome() {
   const user = useAuthStore((s) => s.user);
+  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const logout = useAuthStore((s) => s.logout);
   const setTrack = usePlayerStore((s) => s.setTrack);
 
   const getGreeting = () => {
@@ -73,6 +75,35 @@ export default function DashboardHome() {
 
   return (
     <div className="p-4 md:p-8 space-y-8 max-w-7xl mx-auto">
+      {/* Auth Navigation Bar */}
+      <div className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-display font-bold">ilovemusic</h1>
+        <div className="flex gap-3">
+          {isAuthenticated && user ? (
+            <>
+              <Link to="/settings" className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-secondary transition-colors">
+                Settings
+              </Link>
+              <button
+                onClick={logout}
+                className="px-4 py-2 text-sm rounded-lg bg-red-500/10 text-red-400 border border-red-500/20 hover:bg-red-500/20 transition-colors"
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <>
+              <Link to="/login" className="px-4 py-2 text-sm rounded-lg border border-border hover:bg-secondary transition-colors">
+                Login
+              </Link>
+              <Link to="/register" className="px-4 py-2 text-sm rounded-lg gradient-bg text-white hover:opacity-90 transition-opacity">
+                Register
+              </Link>
+            </>
+          )}
+        </div>
+      </div>
+
       {/* Hero */}
       <motion.div
         initial={{ opacity: 0, y: -10 }}

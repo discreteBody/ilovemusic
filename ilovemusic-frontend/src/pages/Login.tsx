@@ -20,8 +20,10 @@ type LoginForm = z.infer<typeof loginSchema>;
 const Login = () => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
+  const setToken = useAuthStore((s) => s.setToken);
 
   const { register, handleSubmit, formState: { errors } } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
@@ -29,22 +31,81 @@ const Login = () => {
 
   const onSubmit = async (data: LoginForm) => {
     setIsLoading(true);
-    await new Promise((r) => setTimeout(r, 1200));
-    login({ id: '1', name: 'Alex Rivera', email: data.email, avatar: '' });
-    setIsLoading(false);
-    navigate('/dashboard');
+    setError(null);
+    try {
+      const response = await fetch('http://localhost:8080/ilovemusic/api/auth/login', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          username: data.email,
+          password: data.password,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        setError(result.message || 'Login failed');
+        setIsLoading(false);
+        return;
+      }
+
+      // Store the token from response
+      if (result.data?.token) {
+        setToken(result.data.token);
+      }
+
+      // Login the user
+      login({ id: '1', name: result.data?.username || data.email, email: result.data?.email || data.email }, result.data?.token);
+      setIsLoading(false);
+      navigate('/');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Login failed');
+      setIsLoading(false);
+    }
   };
 
-  const handleGoogleSuccess = (credentialResponse: any) => {
-    console.log('Google login success:', credentialResponse);
-    const token = credentialResponse.credential;
-    // TODO: Send token to backend for verification
-    login({ id: '1', name: 'Google User', email: 'user@gmail.com', avatar: '' });
-    navigate('/');
+  const handleGoogleSuccess = async (credentialResponse: { credential: string }) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('http://localhost:8080/ilovemusic/api/auth/google/callback', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          token: credentialResponse.credential,
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        setError(result.message || 'Google login failed');
+        setIsLoading(false);
+        return;
+      }
+
+      // Store the token from response
+      if (result.data?.token) {
+        setToken(result.data.token);
+      }
+
+      // Login the user
+      login({ id: '1', name: result.data?.username, email: result.data?.email }, result.data?.token);
+      setIsLoading(false);
+      navigate('/');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Google login failed');
+      setIsLoading(false);
+    }
   };
 
   const handleGoogleError = () => {
-    console.error('Google login failed');
+    setError('Google login failed. Please try again.');
   };
 
   return (
@@ -66,11 +127,17 @@ const Login = () => {
           <p className="mt-1 text-sm text-muted-foreground">Sign in to your account</p>
         </div>
 
+        {error && (
+          <div className="mb-6 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm">
+            {error}
+          </div>
+        )}
+
         <div className="mb-6">
           <GoogleLogin
             onSuccess={handleGoogleSuccess}
             onError={handleGoogleError}
-            theme="dark"
+            theme="outline"
             size="large"
             width="100%"
           />
@@ -106,6 +173,12 @@ const Login = () => {
             {isLoading ? 'Signing in...' : 'Sign In'}
           </Button>
         </form>
+
+        <div className="mt-4 text-center">
+          <Link to="/forgot-password" className="text-sm text-primary hover:underline">
+            Forgot password?
+          </Link>
+        </div>
 
         <p className="mt-6 text-center text-sm text-muted-foreground">
           Don't have an account?{' '}

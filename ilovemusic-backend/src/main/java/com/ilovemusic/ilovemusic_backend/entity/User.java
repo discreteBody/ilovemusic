@@ -31,6 +31,19 @@ public class User {
     private String spotifyId;
     private String youtubeId;
 
+    // Password reset fields
+    @Column(name = "reset_token")
+    private String resetToken;
+
+    @Column(name = "reset_token_expiry")
+    private LocalDateTime resetTokenExpiry;
+
+    @Column(name = "email_verified", nullable = false)
+    private Boolean emailVerified = false;
+
+    @Column(name = "password_reset_attempts")
+    private Integer passwordResetAttempts = 0;
+
     @Column(name = "created_at")
     private LocalDateTime createdAt;
 
